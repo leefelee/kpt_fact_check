@@ -185,7 +185,7 @@ def fact_check(quoted_text: str, user_instruction: str) -> str:
     prompt = SYSTEM_PROMPT + "\n\n" + "\n".join(parts)
 
     response = gemini_client.models.generate_content(
-        model="gemini-3-flash",
+        model="gemini-2.5-flash",
         contents=prompt,
         config=types.GenerateContentConfig(
             tools=[types.Tool(google_search=types.GoogleSearch())]
