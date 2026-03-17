@@ -91,7 +91,7 @@ def handle_message(event: MessageEvent):
         push(source_id, result)
     except Exception as e:
         logger.error(f"Fact check failed: {e}")
-        push(source_id, "⚠️ 查核失敗，請稍後再試。")
+        push(source_id, "⚠️ 失敗，請稍後再試。")
 
 
 # ── Helper: detect bot mention ────────────────────────────────────────────────
@@ -185,7 +185,7 @@ def fact_check(quoted_text: str, user_instruction: str) -> str:
     prompt = SYSTEM_PROMPT + "\n\n" + "\n".join(parts)
 
     response = gemini_client.models.generate_content(
-        model="gemma-3-27b-it",
+        model="gemini-3-flash",
         contents=prompt,
         config=types.GenerateContentConfig(
             tools=[types.Tool(google_search=types.GoogleSearch())]
