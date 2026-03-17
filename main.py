@@ -183,7 +183,7 @@ def fact_check(text: str) -> str:
     prompt = f"{SYSTEM_PROMPT}\n\n請查核以下內容：\n\n「{text}」"
 
     response = gemini_client.models.generate_content(
-        model="gemini-2.5-flash lite",
+        model="gemini-2.5-flash",
         contents=prompt,
         config=types.GenerateContentConfig(
             tools=[types.Tool(google_search=types.GoogleSearch())]
