@@ -11,7 +11,7 @@ from linebot.v3.messaging import (
     Configuration,
     ApiClient,
     MessagingApi,
-    ReplyMessageRequest,
+    PushMessageRequest,
     TextMessage,
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
@@ -79,18 +79,20 @@ def handle_message(event: MessageEvent):
     # Extract the content to fact-check
     target_text = extract_target_text(event, text)
 
+    source_id = get_source_id(event)
+
     if not target_text:
-        reply(event, "請 reply 要查核的訊息後再 @ 我，或是直接把要查核的內容貼在 @ 後面 🙏")
+        push(source_id, "請 reply 要查核的訊息後再 @ 我，或是直接把要查核的內容貼在 @ 後面 🙏")
         return
 
-    reply(event, "🔍 查核中，請稍候...")
+    push(source_id, "🔍 查核中，請稍候...")
 
     try:
         result = fact_check(target_text)
-        reply(event, result)
+        push(source_id, result)
     except Exception as e:
         logger.error(f"Fact check failed: {e}")
-        reply(event, "⚠️ 查核失敗，請稍後再試。")
+        push(source_id, "⚠️ 查核失敗，請稍後再試。")
 
 
 # ── Helper: detect bot mention ────────────────────────────────────────────────
@@ -127,13 +129,25 @@ def extract_target_text(event: MessageEvent, text: str) -> str:
     return ""
 
 
-# ── Helper: send reply ────────────────────────────────────────────────────────
-def reply(event: MessageEvent, message: str):
+# ── Helper: get push target ID ────────────────────────────────────────────────
+def get_source_id(event: MessageEvent) -> str:
+    source = event.source
+    # Group or room → push to group/room; 1-on-1 → push to user
+    if hasattr(source, "group_id") and source.group_id:
+        return source.group_id
+    if hasattr(source, "room_id") and source.room_id:
+        return source.room_id
+    return source.user_id
+
+
+# ── Helper: push message ──────────────────────────────────────────────────────
+def push(to: str, message: str):
     with ApiClient(line_config) as api_client:
+        from linebot.v3.messaging import PushMessageRequest
         api = MessagingApi(api_client)
-        api.reply_message(
-            ReplyMessageRequest(
-                reply_token=event.reply_token,
+        api.push_message(
+            PushMessageRequest(
+                to=to,
                 messages=[TextMessage(text=message)],
             )
         )
