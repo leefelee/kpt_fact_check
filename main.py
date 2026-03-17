@@ -1,7 +1,8 @@
 import os
 import re
 import logging
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 from fastapi import FastAPI, Request, HTTPException
 from linebot.v3 import WebhookHandler
@@ -29,18 +30,7 @@ handler = WebhookHandler(LINE_CHANNEL_SECRET)
 line_config = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 
 # ── Gemini setup ──────────────────────────────────────────────────────────────
-genai.configure(api_key=GEMINI_API_KEY)
-
-GOOGLE_SEARCH_TOOL = genai.protos.Tool(
-    google_search_retrieval=genai.protos.GoogleSearchRetrieval(
-        dynamic_retrieval_config=genai.protos.DynamicRetrievalConfig(
-            mode=genai.protos.DynamicRetrievalConfig.Mode.MODE_DYNAMIC,
-            dynamic_threshold=0.3,
-        )
-    )
-)
-
-gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 app = FastAPI()
@@ -178,9 +168,12 @@ SYSTEM_PROMPT = """你是一個專業的即時事實查核助手，專門協助�
 def fact_check(text: str) -> str:
     prompt = f"{SYSTEM_PROMPT}\n\n請查核以下內容：\n\n「{text}」"
 
-    response = gemini_model.generate_content(
-        prompt,
-        tools=[GOOGLE_SEARCH_TOOL],
+    response = gemini_client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            tools=[types.Tool(google_search=types.GoogleSearch())]
+        ),
     )
 
     return response.text.strip()
