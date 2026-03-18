@@ -91,8 +91,10 @@ def handle_message(event: MessageEvent):
         push(source_id, result)
     except Exception as e:
         logger.error(f"Fact check failed: {e}")
-        push(source_id, "⚠️ 失敗，趕快叫開發者來修。")
-
+        if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+            push(source_id, "⚠️  開發者的 Free Tier 被你燒完了")
+        else:
+            push(source_id, "⚠️ 失敗，快叫開發者來修。")
 
 # ── Helper: detect bot mention ────────────────────────────────────────────────
 def is_bot_mentioned(event: MessageEvent, text: str) -> bool:
