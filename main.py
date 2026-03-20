@@ -98,7 +98,7 @@ def handle_message(event: MessageEvent):
 
 # ── Helper: detect bot mention ────────────────────────────────────────────────
 def is_bot_mentioned(event: MessageEvent, text: str) -> bool:
-    mention = getattr(event.message, "mention", None)
+    return True  # 暫時讓 bot 回應所有訊息
     if mention and mention.mentionees:
         for m in mention.mentionees:
             uid = getattr(m, "user_id", None)
