@@ -32,6 +32,12 @@ line_config = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 # ── Gemini setup ──────────────────────────────────────────────────────────────
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
+# ── Load system prompt from file ──────────────────────────────────────────────
+PROMPT_PATH = os.path.join(os.path.dirname(__file__), "prompt.txt")
+with open(PROMPT_PATH, "r", encoding="utf-8") as f:
+    SYSTEM_PROMPT = f.read()
+logger.info("System prompt loaded.")
+
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 app = FastAPI()
 
@@ -94,7 +100,6 @@ def handle_message(event: MessageEvent):
 
 # ── Helper: detect bot mention ────────────────────────────────────────────────
 def is_bot_mentioned(event: MessageEvent, text: str) -> bool:
-    # Check mention object (group chats provide this)
     mention = getattr(event.message, "mention", None)
     if mention and mention.mentionees:
         for m in mention.mentionees:
@@ -102,7 +107,6 @@ def is_bot_mentioned(event: MessageEvent, text: str) -> bool:
             if uid == bot_user_id:
                 return True
 
-    # Fallback: check if text contains @ symbol
     if "@" in text:
         return True
 
@@ -111,19 +115,17 @@ def is_bot_mentioned(event: MessageEvent, text: str) -> bool:
 
 # ── Helper: extract quoted text + user instruction ────────────────────────────
 def extract_target_text(event: MessageEvent, text: str) -> tuple[str, str]:
-    # Get quoted (reply) message content
     quoted = getattr(event.message, "quoted_message_preview", None)
     quoted_text = ""
     if quoted and getattr(quoted, "text", None):
         quoted_text = quoted.text.strip()
 
-    # Get text typed after @mention (strip all @Xxx tokens)
     user_instruction = re.sub(r"@\S+", "", text).strip()
 
     return quoted_text, user_instruction
 
 
-# ── Helper: reply message (free, no monthly limit) ───────────────────────────
+# ── Helper: reply message ─────────────────────────────────────────────────────
 def reply(event: MessageEvent, message: str):
     with ApiClient(line_config) as api_client:
         api = MessagingApi(api_client)
@@ -133,34 +135,6 @@ def reply(event: MessageEvent, message: str):
                 messages=[TextMessage(text=message)],
             )
         )
-
-
-# ── System prompt ─────────────────────────────────────────────────────────────
-SYSTEM_PROMPT = """你是一個專業的即時事實查核助手，專門協助台灣用戶尤其是不熟悉科技的長輩，辨別 LINE 群組中流傳的假訊息。
-
-你會先辨識使用者給你的資訊、問題是否有「需要請你協助查核的命題」，如果有請依照以下格式回覆：
-
-----------------------------------------------
-【查核結果】❌ 假訊息 / ✅ 正確 / ⚠️ 待查證
-
-【問題所在】
-（如為假訊息：說明哪裡錯誤、為何是假的）
-
-【正確資訊】
-（提供正確的說法或背景知識）
-
-【來源】
-1. 來源名稱：網址
-2. 來源名稱：網址
------------------------------------------------
-注意事項：
-- 用繁體中文回覆
-- 語氣親切，適合家庭群組，不需要用您
-- 來源盡量引用台灣媒體、政府官方網站、或國際可信媒體
-- 若資訊不足以判斷，誠實標示「待查證」並說明原因
-- 回覆長度控制在 300 字元以內
-- 如果使用者提供給你的文字判斷沒有「需要請你協助查核的命題」，則以一般對話的形式回覆，但將回覆長度控制在 100 字元之內
-"""
 
 
 # ── Core: Gemini fact-check ───────────────────────────────────────────────────
