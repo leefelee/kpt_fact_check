@@ -29,19 +29,30 @@ GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 line_config = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 
-# ── Gemini setup ──────────────────────────────────────────────────────────────
+# ── Gemini client (shared for all models) ─────────────────────────────────────
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# ── Load system prompt from file ──────────────────────────────────────────────
-PROMPT_PATH = os.path.join(os.path.dirname(__file__), "prompt.txt")
-with open(PROMPT_PATH, "r", encoding="utf-8") as f:
+# ── Load prompts ──────────────────────────────────────────────────────────────
+BASE_DIR = os.path.dirname(__file__)
+
+with open(os.path.join(BASE_DIR, "prompt.txt"), "r", encoding="utf-8") as f:
     SYSTEM_PROMPT = f.read()
-logger.info("System prompt loaded.")
+
+# Router prompt: Gemma 只需要判斷要不要查核
+ROUTER_PROMPT = """你是一個訊息分類助手。
+
+判斷使用者的訊息是否包含「需要事實查核的聲明」（例如健康、食安、政治、時事、科學相關的具體聲明，可能為假訊息或轉傳文）。
+
+只回覆以下其中一個詞，不要有其他文字：
+- FACT_CHECK （需要查核）
+- CHAT （一般閒聊或問題）
+"""
+
+logger.info("Prompts loaded.")
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 app = FastAPI()
 
-# ── Bot user ID (fetched once on startup) ─────────────────────────────────────
 bot_user_id: str = ""
 
 
@@ -77,23 +88,34 @@ async def webhook(request: Request):
 def handle_message(event: MessageEvent):
     text: str = event.message.text or ""
 
-    # Only respond when bot is mentioned
     if not is_bot_mentioned(event, text):
         return
 
     quoted_text, user_instruction = extract_target_text(event, text)
+    combined = "\n".join(filter(None, [quoted_text, user_instruction]))
 
-    if not quoted_text and not user_instruction:
+    if not combined:
         reply(event, "請 reply 要查核的訊息後再 @ 我，或是直接把要查核的內容貼在 @ 後面 🙏")
         return
 
     try:
-        result = fact_check(quoted_text, user_instruction)
+        # Step 1: Gemma 判斷要不要查核
+        decision = route(combined)
+        logger.info(f"Router decision: {decision}")
+
+        if decision == "FACT_CHECK":
+            # Step 2: Gemini + Google Search 查核
+            result = fact_check(quoted_text, user_instruction)
+        else:
+            # Step 2: Gemma 直接閒聊回覆
+            result = chat(combined)
+
         reply(event, result)
+
     except Exception as e:
-        logger.error(f"Fact check failed: {e}")
+        logger.error(f"Failed: {e}")
         if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-            reply(event, "⚠️ API 額度用完了，今天查不了，明天再試試看 🙏")
+            reply(event, "⚠️ API 額度用完了，明天再試 🙏")
         else:
             reply(event, "⚠️ 失敗，快叫開發者來修。")
 
@@ -103,29 +125,24 @@ def is_bot_mentioned(event: MessageEvent, text: str) -> bool:
     mention = getattr(event.message, "mention", None)
     if mention and mention.mentionees:
         for m in mention.mentionees:
-            uid = getattr(m, "user_id", None)
-            if uid == bot_user_id:
+            if getattr(m, "user_id", None) == bot_user_id:
                 return True
-
     if "@" in text:
         return True
-
     return False
 
 
-# ── Helper: extract quoted text + user instruction ────────────────────────────
+# ── Helper: extract quoted + instruction ─────────────────────────────────────
 def extract_target_text(event: MessageEvent, text: str) -> tuple[str, str]:
     quoted = getattr(event.message, "quoted_message_preview", None)
     quoted_text = ""
     if quoted and getattr(quoted, "text", None):
         quoted_text = quoted.text.strip()
-
     user_instruction = re.sub(r"@\S+", "", text).strip()
-
     return quoted_text, user_instruction
 
 
-# ── Helper: reply message ─────────────────────────────────────────────────────
+# ── Helper: reply ─────────────────────────────────────────────────────────────
 def reply(event: MessageEvent, message: str):
     with ApiClient(line_config) as api_client:
         api = MessagingApi(api_client)
@@ -137,7 +154,27 @@ def reply(event: MessageEvent, message: str):
         )
 
 
-# ── Core: Gemini fact-check ───────────────────────────────────────────────────
+# ── Step 1: Gemma 3 27B router ────────────────────────────────────────────────
+def route(text: str) -> str:
+    response = gemini_client.models.generate_content(
+        model="gemma-3-27b-it",
+        contents=f"{ROUTER_PROMPT}\n\n訊息內容：「{text}」",
+    )
+    decision = response.text.strip().upper()
+    # 防呆：如果 Gemma 回傳奇怪的東西，預設查核
+    return "FACT_CHECK" if "FACT_CHECK" in decision else "CHAT"
+
+
+# ── Step 2a: Gemma 3 27B 閒聊 ────────────────────────────────────────────────
+def chat(text: str) -> str:
+    response = gemini_client.models.generate_content(
+        model="gemma-3-27b-it",
+        contents=f"{SYSTEM_PROMPT}\n\n訊息：「{text}」",
+    )
+    return response.text.strip()
+
+
+# ── Step 2b: Gemini + Google Search 查核 ─────────────────────────────────────
 def fact_check(quoted_text: str, user_instruction: str) -> str:
     parts = []
     if quoted_text:
@@ -154,5 +191,4 @@ def fact_check(quoted_text: str, user_instruction: str) -> str:
             tools=[types.Tool(google_search=types.GoogleSearch())]
         ),
     )
-
     return response.text.strip()
