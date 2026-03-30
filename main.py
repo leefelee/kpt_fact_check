@@ -67,7 +67,7 @@ ROUTER_PROMPT = """你是一個訊息分類助手。
 """
 
 # 全域強制指令，確保模型在所有情境下壓縮輸出
-HARD_CONSTRAINT = "\n\n[系統強制指令]：回覆請極度簡練，絕對不可超過 3 行，總字數必須控制在 150 字以內。"
+HARD_CONSTRAINT = "\n\n[系統強制指令]：回覆請極度簡練，總字數必須控制在 300 字以內。"
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 app = FastAPI()
@@ -155,7 +155,7 @@ def extract_target_text(event: MessageEvent, text: str) -> tuple[str, str]:
     user_instruction = re.sub(r"@\S+", "", text).strip()
     return quoted_text, user_instruction
 
-def truncate_text(text: str, max_length: int = 150) -> str:
+def truncate_text(text: str, max_length: int = 300) -> str:
     if len(text) > max_length:
         return text[:max_length] + "...\n(字數達上限)"
     return text
