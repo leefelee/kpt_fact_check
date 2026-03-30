@@ -55,14 +55,14 @@ def load_prompt() -> str:
 ROUTER_PROMPT = """你是一個訊息分類助手。
 
 判斷使用者的訊息是否屬於以下兩種情況之一：
-1. 「需要事實查核的聲明」（例如健康、食安、政治、時事的具體聲明）
+1. 「需要事實查核的聲明」（例如健康、食安、政治、時事的具體聲明或轉傳文）
 2. 「需要即時資訊的查詢」（例如詢問今天天氣、股價、新聞、當前時間）
 
-只要符合上述任一情況，請回覆 FACT_CHECK。
-若是純粹閒聊或無需聯網的情感抒發，請回覆 CHAT。
+只要符合上述任一情況（需要聯網查資料），請回覆 SEARCH_NEEDED。
+若是純粹閒聊、打招呼或無需聯網的一般問題，請回覆 CHAT。
 
 只回覆以下其中一個詞，不要有其他文字：
-- FACT_CHECK
+- SEARCH_NEEDED
 - CHAT
 """
 
@@ -111,7 +111,7 @@ def handle_message(event: MessageEvent):
     combined = "\n".join(filter(None, [quoted_text, user_instruction]))
 
     if not combined:
-        reply(event, "請 reply 要查核的訊息後再 @ 我，或是直接把要查核的內容貼在 @ 後面 🙏")
+        reply(event, "請 reply 要查核的訊息後再 @ 我，或是直接把要查詢的內容貼在 @ 後面 🙏")
         return
 
     try:
@@ -119,15 +119,15 @@ def handle_message(event: MessageEvent):
         system_prompt = load_prompt()
         logger.info("Prompt loaded from Sheets.")
 
-        # Step 1: Gemma 判斷要不要查核
+        # Step 1: Gemini 判斷要不要查核或搜尋
         decision = route(combined)
         logger.info(f"Router decision: {decision}")
 
-        if decision == "FACT_CHECK":
-            # Step 2a: Gemini + Google Search 查核
+        if decision == "SEARCH_NEEDED":
+            # Step 2a: Gemini + Google Search 查核與查詢
             result = fact_check(quoted_text, user_instruction, system_prompt)
         else:
-            # Step 2b: Gemma 閒聊回覆
+            # Step 2b: Gemini 閒聊回覆
             result = chat(combined, system_prompt)
 
         reply(event, result)
@@ -137,7 +137,7 @@ def handle_message(event: MessageEvent):
         if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
             reply(event, "⚠️ API 額度用完了，明天再試 🙏")
         else:
-            reply(event, "⚠️ 失敗，快叫開發者來修。")
+            reply(event, "⚠️ 系統發生錯誤。")
 
 
 # ── Helper: detect bot mention ────────────────────────────────────────────────
@@ -178,7 +178,7 @@ def route(text: str) -> str:
         contents=f"{ROUTER_PROMPT}\n\n訊息內容：「{text}」",
     )
     decision = response.text.strip().upper()
-    return "FACT_CHECK" if "FACT_CHECK" in decision else "CHAT"
+    return "SEARCH_NEEDED" if "SEARCH_NEEDED" in decision else "CHAT"
 
 
 # ── Step 2a: Gemini 2.5 閒聊 ────────────────────────────────────────────────
@@ -190,13 +190,16 @@ def chat(text: str, system_prompt: str) -> str:
     return response.text.strip()
 
 
-# ── Step 2b: Gemini + Google Search 查核 ─────────────────────────────────────
+# ── Step 2b: Gemini + Google Search 查核與查詢 ────────────────────────────────
 def fact_check(quoted_text: str, user_instruction: str, system_prompt: str) -> str:
     parts = []
     if quoted_text:
-        parts.append(f"查核內容：「{quoted_text}」")
+        parts.append(f"處理內容：「{quoted_text}」")
     if user_instruction:
         parts.append(f"使用者補充指示：「{user_instruction}」")
+
+    # 強制加入動態壓縮指令，確保搜尋結果不會破壞版面
+    parts.append("請參考 Google 搜尋結果，並嚴格套用 System Prompt 中的 <rules> 限制，將總字數壓縮在 150 字與 3 行以內。")
 
     prompt = system_prompt + "\n\n" + "\n".join(parts)
 
