@@ -51,7 +51,7 @@ def load_prompt() -> str:
         logger.error(f"Failed to load prompt from Sheets: {e}")
         return FALLBACK_PROMPT
 
-# ── Router prompt (hardcoded，不需要常改) ────────────────────────────────────
+# ── System Prompts & Constraints ──────────────────────────────────────────────
 ROUTER_PROMPT = """你是一個訊息分類助手。
 
 判斷使用者的訊息是否屬於以下兩種情況之一：
@@ -66,11 +66,13 @@ ROUTER_PROMPT = """你是一個訊息分類助手。
 - CHAT
 """
 
+# 全域強制指令，確保模型在所有情境下壓縮輸出
+HARD_CONSTRAINT = "\n\n[系統強制指令]：回覆請極度簡練，絕對不可超過 3 行，總字數必須控制在 150 字以內。"
+
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 app = FastAPI()
 
 bot_user_id: str = ""
-
 
 @app.on_event("startup")
 async def fetch_bot_user_id():
@@ -84,7 +86,6 @@ async def fetch_bot_user_id():
     except Exception as e:
         logger.error(f"Failed to fetch bot user ID: {e}")
 
-
 # ── Webhook endpoint ──────────────────────────────────────────────────────────
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -97,7 +98,6 @@ async def webhook(request: Request):
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     return {"status": "ok"}
-
 
 # ── Message event handler ─────────────────────────────────────────────────────
 @handler.add(MessageEvent, message=TextMessageContent)
@@ -115,22 +115,21 @@ def handle_message(event: MessageEvent):
         return
 
     try:
-        # 每次從 Google Sheets 載入最新 prompt
         system_prompt = load_prompt()
         logger.info("Prompt loaded from Sheets.")
 
-        # Step 1: Gemini 判斷要不要查核或搜尋
         decision = route(combined)
         logger.info(f"Router decision: {decision}")
 
         if decision == "SEARCH_NEEDED":
-            # Step 2a: Gemini + Google Search 查核與查詢
             result = fact_check(quoted_text, user_instruction, system_prompt)
         else:
-            # Step 2b: Gemini 閒聊回覆
             result = chat(combined, system_prompt)
 
-        reply(event, result)
+        # 最終防線：Python 層級字串截斷
+        final_result = truncate_text(result, max_length=150)
+        
+        reply(event, final_result)
 
     except Exception as e:
         logger.error(f"Failed: {e}")
@@ -139,8 +138,7 @@ def handle_message(event: MessageEvent):
         else:
             reply(event, "⚠️ 系統發生錯誤。")
 
-
-# ── Helper: detect bot mention ────────────────────────────────────────────────
+# ── Helper functions ──────────────────────────────────────────────────────────
 def is_bot_mentioned(event: MessageEvent, text: str) -> bool:
     mention = getattr(event.message, "mention", None)
     if mention and mention.mentionees:
@@ -149,7 +147,6 @@ def is_bot_mentioned(event: MessageEvent, text: str) -> bool:
                 return True
     return False
 
-# ── Helper: extract quoted + instruction ─────────────────────────────────────
 def extract_target_text(event: MessageEvent, text: str) -> tuple[str, str]:
     quoted = getattr(event.message, "quoted_message_preview", None)
     quoted_text = ""
@@ -158,8 +155,11 @@ def extract_target_text(event: MessageEvent, text: str) -> tuple[str, str]:
     user_instruction = re.sub(r"@\S+", "", text).strip()
     return quoted_text, user_instruction
 
+def truncate_text(text: str, max_length: int = 150) -> str:
+    if len(text) > max_length:
+        return text[:max_length] + "...\n(字數達上限)"
+    return text
 
-# ── Helper: reply ─────────────────────────────────────────────────────────────
 def reply(event: MessageEvent, message: str):
     with ApiClient(line_config) as api_client:
         api = MessagingApi(api_client)
@@ -170,8 +170,7 @@ def reply(event: MessageEvent, message: str):
             )
         )
 
-
-# ── Step 1: Gemini 2.5 router ────────────────────────────────────────────────
+# ── Generation functions ──────────────────────────────────────────────────────
 def route(text: str) -> str:
     response = gemini_client.models.generate_content(
         model="gemini-2.5-flash-lite",
@@ -180,17 +179,18 @@ def route(text: str) -> str:
     decision = response.text.strip().upper()
     return "SEARCH_NEEDED" if "SEARCH_NEEDED" in decision else "CHAT"
 
-
-# ── Step 2a: Gemini 2.5 閒聊 ────────────────────────────────────────────────
 def chat(text: str, system_prompt: str) -> str:
+    prompt = f"{system_prompt}\n\n訊息：「{text}」{HARD_CONSTRAINT}"
     response = gemini_client.models.generate_content(
         model="gemini-2.5-flash-lite",
-        contents=f"{system_prompt}\n\n訊息：「{text}」",
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            max_output_tokens=150,
+            temperature=0.7
+        )
     )
     return response.text.strip()
 
-
-# ── Step 2b: Gemini + Google Search 查核與查詢 ────────────────────────────────
 def fact_check(quoted_text: str, user_instruction: str, system_prompt: str) -> str:
     parts = []
     if quoted_text:
@@ -198,16 +198,15 @@ def fact_check(quoted_text: str, user_instruction: str, system_prompt: str) -> s
     if user_instruction:
         parts.append(f"使用者補充指示：「{user_instruction}」")
 
-    # 強制加入動態壓縮指令，確保搜尋結果不會破壞版面
-    parts.append("請參考 Google 搜尋結果，並嚴格套用 System Prompt 中的 <rules> 限制，將總字數壓縮在 150 字與 3 行以內。")
-
-    prompt = system_prompt + "\n\n" + "\n".join(parts)
+    prompt = system_prompt + "\n\n" + "\n".join(parts) + HARD_CONSTRAINT
 
     response = gemini_client.models.generate_content(
         model="gemini-2.5-flash-lite",
         contents=prompt,
         config=types.GenerateContentConfig(
-            tools=[types.Tool(google_search=types.GoogleSearch())]
+            tools=[types.Tool(google_search=types.GoogleSearch())],
+            max_output_tokens=200, 
+            temperature=0.2 
         ),
     )
     return response.text.strip()
