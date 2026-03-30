@@ -142,10 +142,7 @@ def is_bot_mentioned(event: MessageEvent, text: str) -> bool:
         for m in mention.mentionees:
             if getattr(m, "user_id", None) == bot_user_id:
                 return True
-    if "@" in text:
-        return True
     return False
-
 
 # ── Helper: extract quoted + instruction ─────────────────────────────────────
 def extract_target_text(event: MessageEvent, text: str) -> tuple[str, str]:
@@ -169,20 +166,20 @@ def reply(event: MessageEvent, message: str):
         )
 
 
-# ── Step 1: Gemma 3 27B router ────────────────────────────────────────────────
+# ── Step 1: Gemini 2.5 router ────────────────────────────────────────────────
 def route(text: str) -> str:
     response = gemini_client.models.generate_content(
-        model="gemma-3-27b-it",
+        model="gemini-2.5-flash-lite",
         contents=f"{ROUTER_PROMPT}\n\n訊息內容：「{text}」",
     )
     decision = response.text.strip().upper()
     return "FACT_CHECK" if "FACT_CHECK" in decision else "CHAT"
 
 
-# ── Step 2a: Gemma 3 27B 閒聊 ────────────────────────────────────────────────
+# ── Step 2a: Gemini 2.5 閒聊 ────────────────────────────────────────────────
 def chat(text: str, system_prompt: str) -> str:
     response = gemini_client.models.generate_content(
-        model="gemma-3-27b-it",
+        model="gemini-2.5-flash-lite",
         contents=f"{system_prompt}\n\n訊息：「{text}」",
     )
     return response.text.strip()
